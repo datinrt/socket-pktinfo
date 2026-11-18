@@ -5,7 +5,9 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::{io, mem, ptr};
 
-use socket2::{Domain, InterfaceIndexOrAddress, Protocol, SockAddr, SockAddrStorage, Socket, Type};
+use socket2::{Domain, Protocol, SockAddr, SockAddrStorage, Socket, Type};
+#[cfg(not(target_os = "nto"))]
+use socket2::InterfaceIndexOrAddress;
 
 use crate::PktInfo;
 
@@ -37,6 +39,22 @@ where
 pub struct PktInfoUdpSocket {
     socket: Socket,
     domain: Domain,
+}
+
+#[cfg(target_os = "nto")]
+#[derive(Clone, Copy)]
+#[repr(C)]
+struct Ipv6Mreq {
+    multiaddr: libc::in6_addr,
+    interface: u32,
+}
+
+#[cfg(target_os = "nto")]
+#[derive(Clone, Copy)]
+#[repr(C)]
+struct Ipv4Mreq {
+    multiaddr: libc::in_addr,
+    interface: libc::in_addr,
 }
 
 impl Debug for PktInfoUdpSocket {
@@ -96,7 +114,29 @@ impl PktInfoUdpSocket {
     }
 
     pub fn join_multicast_v4(&self, addr: &Ipv4Addr, interface: &Ipv4Addr) -> io::Result<()> {
-        self.socket.join_multicast_v4(addr, interface)
+        #[cfg(target_os = "nto")]
+        {
+            let request = Ipv4Mreq {
+                multiaddr: libc::in_addr {
+                    s_addr: u32::from_ne_bytes(addr.octets()),
+                },
+                interface: libc::in_addr {
+                    s_addr: u32::from_ne_bytes(interface.octets()),
+                },
+            };
+            unsafe {
+                setsockopt(
+                    self.socket.as_raw_fd(),
+                    libc::IPPROTO_IP,
+                    libc::IP_ADD_MEMBERSHIP,
+                    request,
+                )
+            }
+        }
+        #[cfg(not(target_os = "nto"))]
+        {
+            self.socket.join_multicast_v4(addr, interface)
+        }
     }
 
     /// Drop membership in a multicast group for IPv4.
@@ -104,6 +144,7 @@ impl PktInfoUdpSocket {
         self.socket.leave_multicast_v4(addr, interface)
     }
 
+    #[cfg(not(target_os = "nto"))]
     pub fn join_multicast_v4_n(
         &self,
         addr: &Ipv4Addr,
@@ -112,6 +153,7 @@ impl PktInfoUdpSocket {
         self.socket.join_multicast_v4_n(addr, interface)
     }
 
+    #[cfg(not(target_os = "nto"))]
     pub fn leave_multicast_v4_n(
         &self,
         addr: &Ipv4Addr,
@@ -133,12 +175,48 @@ impl PktInfoUdpSocket {
     }
 
     pub fn join_multicast_v6(&self, addr: &Ipv6Addr, interface: u32) -> io::Result<()> {
-        self.socket.join_multicast_v6(addr, interface)
+        #[cfg(target_os = "nto")]
+        {
+            let request = Ipv6Mreq {
+                multiaddr: libc::in6_addr { s6_addr: addr.octets() },
+                interface,
+            };
+            unsafe {
+                setsockopt(
+                    self.socket.as_raw_fd(),
+                    libc::IPPROTO_IPV6,
+                    libc::IPV6_JOIN_GROUP,
+                    request,
+                )
+            }
+        }
+        #[cfg(not(target_os = "nto"))]
+        {
+            self.socket.join_multicast_v6(addr, interface)
+        }
     }
 
     /// Drop membership in a multicast group for IPv6.
     pub fn leave_multicast_v6(&self, addr: &Ipv6Addr, interface: u32) -> io::Result<()> {
-        self.socket.leave_multicast_v6(addr, interface)
+        #[cfg(target_os = "nto")]
+        {
+            let request = Ipv6Mreq {
+                multiaddr: libc::in6_addr { s6_addr: addr.octets() },
+                interface,
+            };
+            unsafe {
+                setsockopt(
+                    self.socket.as_raw_fd(),
+                    libc::IPPROTO_IPV6,
+                    libc::IPV6_LEAVE_GROUP,
+                    request,
+                )
+            }
+        }
+        #[cfg(not(target_os = "nto"))]
+        {
+            self.socket.leave_multicast_v6(addr, interface)
+        }
     }
 
     pub fn set_multicast_if_v6(&self, interface: u32) -> io::Result<()> {
